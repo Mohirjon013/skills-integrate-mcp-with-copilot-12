@@ -5,7 +5,9 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+import csv
+import io
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
@@ -86,6 +88,83 @@ def root():
 @app.get("/activities")
 def get_activities():
     return activities
+
+
+def _activity_report(activity_name: str | None = None,
+                     student_email: str | None = None):
+    selected_activities = activities.items()
+    if activity_name:
+        if activity_name not in activities:
+            raise HTTPException(status_code=404, detail="Activity not found")
+        selected_activities = [(activity_name, activities[activity_name])]
+
+    report = []
+    for name, activity in selected_activities:
+        matching_participants = [
+            email for email in activity["participants"]
+            if not student_email or email == student_email
+        ]
+        report.append({
+            "activity": name,
+            "schedule": activity["schedule"],
+            "participant_count": len(activity["participants"]),
+            "capacity": activity["max_participants"],
+            "spots_left": max(
+                activity["max_participants"] - len(activity["participants"]), 0
+            ),
+            "matching_participant_count": len(matching_participants),
+        })
+
+    return report
+
+
+@app.get("/reports/activities")
+def get_activity_report(
+    activity_name: str | None = Query(default=None),
+    student_email: str | None = Query(default=None),
+):
+    """Return participation and capacity summaries for administrators."""
+    report = _activity_report(activity_name, student_email)
+    return {
+        "filters": {
+            "activity_name": activity_name,
+            "student_email": student_email,
+        },
+        "activities": report,
+        "total_participants": sum(
+            item["participant_count"] for item in report
+        ),
+    }
+
+
+@app.get("/reports/activities.csv")
+def download_activity_report(
+    activity_name: str | None = Query(default=None),
+    student_email: str | None = Query(default=None),
+):
+    """Export the activity participation report as CSV."""
+    report = _activity_report(activity_name, student_email)
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "activity",
+            "schedule",
+            "participant_count",
+            "capacity",
+            "spots_left",
+            "matching_participant_count",
+        ],
+    )
+    writer.writeheader()
+    writer.writerows(report)
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=activity-report.csv"
+        },
+    )
 
 
 @app.post("/activities/{activity_name}/signup")
